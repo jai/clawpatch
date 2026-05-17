@@ -8,6 +8,157 @@ import { turboTaskGraph } from "./mappers/turbo.js";
 import { fixtureRoot, writeFixture } from "./test-helpers.js";
 
 describe("mapFeatures", () => {
+  it("maps Angular routes with import resolution, companions, and context", async () => {
+    const root = await fixtureRoot("clawpatch-angular-map-");
+    await writeFixture(
+      root,
+      "package.json",
+      JSON.stringify(
+        {
+          name: "angular-fixture",
+          scripts: { test: "vitest run" },
+          dependencies: {
+            "@angular/core": "1.0.0",
+            "@angular/router": "1.0.0",
+            "@ionic/angular": "1.0.0",
+          },
+        },
+        null,
+        2,
+      ),
+    );
+    await writeFixture(
+      root,
+      "angular.json",
+      JSON.stringify({ projects: { app: { sourceRoot: "src" } } }, null, 2),
+    );
+    await writeFixture(
+      root,
+      "src/app/app-routing.module.ts",
+      [
+        "import { Routes, RouterModule } from '@angular/router';",
+        "import { HomePage as LandingPage } from './home/home.page';",
+        "import { SettingsPage } from './settings/settings.page';",
+        "import { AuthGuard } from './auth/auth.guard';",
+        "import { ProfileResolver } from './profile/profile.resolver';",
+        "",
+        "const routes: Routes = [",
+        "  {",
+        "    path: 'home',",
+        "    component: LandingPage,",
+        "    canActivate: [AuthGuard],",
+        "    resolve: { profile: ProfileResolver },",
+        "    data: { area: 'dashboard' },",
+        "    children: [{ path: 'settings', component: SettingsPage }],",
+        "  },",
+        "  { path: 'admin', loadChildren: () => import('./admin/admin.module').then((m) => m.AdminModule) },",
+        "];",
+        "",
+        "RouterModule.forRoot(routes);",
+        "",
+      ].join("\n"),
+    );
+    await writeFixture(
+      root,
+      "src/app/home/home.page.ts",
+      "@Component({ templateUrl: './home.page.html', styleUrls: ['./home.page.scss'] }) export class HomePage {}\n",
+    );
+    await writeFixture(root, "src/app/home/home.page.html", "<ion-content />\n");
+    await writeFixture(root, "src/app/home/home.page.scss", "ion-content {}\n");
+    await writeFixture(root, "src/app/home/home.page.spec.ts", "test('home', () => {});\n");
+    await writeFixture(root, "src/app/home/home.service.ts", "export class HomeService {}\n");
+    await writeFixture(
+      root,
+      "src/app/settings/settings.page.ts",
+      "@Component({}) export class SettingsPage {}\n",
+    );
+    await writeFixture(
+      root,
+      "src/app/settings/settings.page.spec.ts",
+      "test('settings', () => {});\n",
+    );
+    await writeFixture(root, "src/app/admin/admin.module.ts", "export class AdminModule {}\n");
+    await writeFixture(root, "src/app/auth/auth.guard.ts", "export class AuthGuard {}\n");
+    await writeFixture(
+      root,
+      "src/app/profile/profile.resolver.ts",
+      "export class ProfileResolver {}\n",
+    );
+
+    const project = await detectProject(root);
+    const result = await mapFeatures(root, project, []);
+    const home = result.features.find((feature) => feature.title === "Angular route /home");
+    const settings = result.features.find(
+      (feature) => feature.title === "Angular route /home/settings",
+    );
+    const admin = result.features.find((feature) => feature.title === "Angular route /admin");
+    const config = result.features.find(
+      (feature) => feature.title === "Angular config angular.json",
+    );
+
+    expect(home?.entrypoints[0]?.path).toBe("src/app/home/home.page.ts");
+    expect(home?.entrypoints[0]?.symbol).toBe("LandingPage");
+    expect(home?.ownedFiles).toEqual(
+      expect.arrayContaining([
+        { path: "src/app/home/home.page.html", reason: "route companion" },
+        { path: "src/app/home/home.page.scss", reason: "route companion" },
+        { path: "src/app/home/home.page.spec.ts", reason: "route companion" },
+        { path: "src/app/home/home.service.ts", reason: "route companion" },
+      ]),
+    );
+    expect(home?.tests).toEqual([
+      { path: "src/app/home/home.page.spec.ts", command: "npm run test" },
+    ]);
+    expect(home?.contextFiles).toEqual(
+      expect.arrayContaining([
+        { path: "src/app/app-routing.module.ts", reason: "guard AuthGuard" },
+      ]),
+    );
+    expect(settings?.entrypoints[0]?.path).toBe("src/app/settings/settings.page.ts");
+    expect(settings?.entrypoints[0]?.route).toBe("/home/settings");
+    expect(admin?.entrypoints[0]?.path).toBe("src/app/admin/admin.module.ts");
+    expect(result.features.map((feature) => feature.title)).toContain("Angular service home");
+    expect(result.features.map((feature) => feature.title)).toContain("Angular guard auth");
+    expect(result.features.map((feature) => feature.title)).toContain("Angular resolver profile");
+    expect(config?.tags).toEqual(expect.arrayContaining(["angular", "ionic"]));
+  });
+
+  it("does not truncate Angular route discovery after 120 routes", async () => {
+    const root = await fixtureRoot("clawpatch-angular-route-cap-");
+    await writeFixture(
+      root,
+      "package.json",
+      JSON.stringify(
+        { name: "angular-routes", dependencies: { "@angular/router": "1.0.0" } },
+        null,
+        2,
+      ),
+    );
+    await writeFixture(root, "src/app/lazy/lazy.module.ts", "export class LazyModule {}\n");
+    await writeFixture(
+      root,
+      "src/app/app.routes.ts",
+      [
+        "import { Routes } from '@angular/router';",
+        "export const routes: Routes = [",
+        ...Array.from(
+          { length: 125 },
+          (_, index) =>
+            `  { path: 'route-${index}', loadChildren: () => import('./lazy/lazy.module').then((m) => m.LazyModule) },`,
+        ),
+        "];",
+        "",
+      ].join("\n"),
+    );
+
+    const project = await detectProject(root);
+    const result = await mapFeatures(root, project, []);
+    const angularRoutes = result.features.filter((feature) => feature.source === "angular-route");
+
+    expect(angularRoutes).toHaveLength(125);
+    expect(angularRoutes.map((feature) => feature.title)).toContain("Angular route /route-124");
+  });
+
   it("maps package bins, scripts, configs, and Next routes", async () => {
     const root = await fixtureRoot("clawpatch-map-");
     await writeFixture(

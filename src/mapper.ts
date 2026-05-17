@@ -1,5 +1,6 @@
 import { nowIso } from "./fs.js";
 import { stableId } from "./id.js";
+import { angularSeeds } from "./mappers/angular.js";
 import { cCppSeeds } from "./mappers/c-cpp.js";
 import { configSeeds } from "./mappers/config.js";
 import { goSeeds } from "./mappers/go.js";
@@ -40,6 +41,7 @@ export type MapOptions = {
 
 const featureMappers: FeatureMapper[] = [
   { name: "node", map: nodeSeeds },
+  { name: "angular", map: angularSeeds },
   { name: "next", map: nextSeeds },
   { name: "react", map: reactSeeds },
   { name: "node-routes", map: nodeRouteSeeds },
