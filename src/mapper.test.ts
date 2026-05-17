@@ -100,10 +100,10 @@ describe("mapFeatures", () => {
     expect(home?.entrypoints[0]?.symbol).toBe("LandingPage");
     expect(home?.ownedFiles).toEqual(
       expect.arrayContaining([
-        { path: "src/app/home/home.page.html", reason: "route companion" },
-        { path: "src/app/home/home.page.scss", reason: "route companion" },
-        { path: "src/app/home/home.page.spec.ts", reason: "route companion" },
-        { path: "src/app/home/home.service.ts", reason: "route companion" },
+        { path: "src/app/home/home.page.html", reason: "template" },
+        { path: "src/app/home/home.page.scss", reason: "style" },
+        { path: "src/app/home/home.page.spec.ts", reason: "test" },
+        { path: "src/app/home/home.service.ts", reason: "feature service" },
       ]),
     );
     expect(home?.tests).toEqual([
@@ -111,7 +111,9 @@ describe("mapFeatures", () => {
     ]);
     expect(home?.contextFiles).toEqual(
       expect.arrayContaining([
-        { path: "src/app/app-routing.module.ts", reason: "guard AuthGuard" },
+        { path: "src/app/auth/auth.guard.ts", reason: "canActivate guard AuthGuard" },
+        { path: "src/app/profile/profile.resolver.ts", reason: "resolve resolver ProfileResolver" },
+        { path: "src/app/app-routing.module.ts", reason: "route data area=dashboard" },
       ]),
     );
     expect(settings?.entrypoints[0]?.path).toBe("src/app/settings/settings.page.ts");
@@ -157,6 +159,399 @@ describe("mapFeatures", () => {
 
     expect(angularRoutes).toHaveLength(125);
     expect(angularRoutes.map((feature) => feature.title)).toContain("Angular route /route-124");
+  });
+
+  it("composes Angular lazy child routes across module boundaries", async () => {
+    const root = await fixtureRoot("clawpatch-angular-lazy-graph-");
+    await writeFixture(
+      root,
+      "package.json",
+      JSON.stringify(
+        {
+          name: "lazy-angular",
+          dependencies: { "@angular/core": "1.0.0", "@angular/router": "1.0.0" },
+        },
+        null,
+        2,
+      ),
+    );
+    await writeFixture(
+      root,
+      "src/app/app-routing.module.ts",
+      [
+        "import { RouterModule, Routes } from '@angular/router';",
+        "import { CountryGuard } from './guards/country-guard';",
+        "const routes: Routes = [",
+        "  { path: 'main', canActivate: [CountryGuard], loadChildren: () => import('./main/main.module').then((m) => m.MainModule) },",
+        "];",
+        "RouterModule.forRoot(routes);",
+      ].join("\n"),
+    );
+    await writeFixture(root, "src/app/guards/country-guard.ts", "export class CountryGuard {}\n");
+    await writeFixture(
+      root,
+      "src/app/guards/child.guard.ts",
+      "import { CanActivateChildFn } from '@angular/router'; export const childGuard: CanActivateChildFn = () => true;\n",
+    );
+    await writeFixture(
+      root,
+      "src/app/main/main.module.ts",
+      "import { MainRoutingModule } from './main-routing.module'; export class MainModule {}\n",
+    );
+    await writeFixture(
+      root,
+      "src/app/main/main-routing.module.ts",
+      [
+        "import { RouterModule, Routes } from '@angular/router';",
+        "import { MainPage } from './main.page';",
+        "import { childGuard } from '../guards/child.guard';",
+        "const routes = [",
+        "  {",
+        "    path: '',",
+        "    component: MainPage,",
+        "    canActivateChild: [childGuard],",
+        "    children: [",
+        "      { path: '', redirectTo: 'transactions', pathMatch: 'full' },",
+        "      { path: 'transactions', loadChildren: () => import('./pages/transactions/transactions.module').then((m) => m.TransactionsModule) },",
+        "    ],",
+        "  },",
+        "] satisfies Routes;",
+        "RouterModule.forChild(routes);",
+      ].join("\n"),
+    );
+    await writeFixture(
+      root,
+      "src/app/main/main.page.ts",
+      "@Component({}) export class MainPage {}\n",
+    );
+    await writeFixture(
+      root,
+      "src/app/main/pages/transactions/transactions.module.ts",
+      "import { TransactionsRoutingModule } from './transactions-routing.module'; export class TransactionsModule {}\n",
+    );
+    await writeFixture(
+      root,
+      "src/app/main/pages/transactions/transactions-routing.module.ts",
+      [
+        "import { RouterModule, Routes } from '@angular/router';",
+        "import { TransactionPage } from './transaction.page';",
+        "import { PendingPage } from './pages/pending/pending.page';",
+        "const childRoutes: Routes = [{ path: 'pending', component: PendingPage }];",
+        "const routes: Routes = [",
+        "  { path: '', component: TransactionPage, children: [...childRoutes] },",
+        "];",
+        "RouterModule.forChild(routes);",
+      ].join("\n"),
+    );
+    await writeFixture(
+      root,
+      "src/app/main/pages/transactions/transaction.page.ts",
+      "@Component({ templateUrl: './transaction.page.html' }) export class TransactionPage {}\n",
+    );
+    await writeFixture(
+      root,
+      "src/app/main/pages/transactions/transaction.page.html",
+      "<ion-content />\n",
+    );
+    await writeFixture(
+      root,
+      "src/app/main/pages/transactions/pages/pending/pending.page.ts",
+      "@Component({}) export class PendingPage {}\n",
+    );
+
+    const project = await detectProject(root);
+    const result = await mapFeatures(root, project, []);
+    const transaction = result.features.find(
+      (feature) => feature.title === "Angular route /main/transactions",
+    );
+    const pending = result.features.find(
+      (feature) => feature.title === "Angular route /main/transactions/pending",
+    );
+
+    expect(transaction?.entrypoints[0]?.path).toBe(
+      "src/app/main/pages/transactions/transaction.page.ts",
+    );
+    expect(pending?.entrypoints[0]?.path).toBe(
+      "src/app/main/pages/transactions/pages/pending/pending.page.ts",
+    );
+    expect(pending?.contextFiles).toEqual(
+      expect.arrayContaining([
+        { path: "src/app/guards/country-guard.ts", reason: "canActivate guard CountryGuard" },
+        { path: "src/app/guards/child.guard.ts", reason: "canActivateChild guard childGuard" },
+      ]),
+    );
+    expect(result.features.map((feature) => feature.title)).not.toContain(
+      "Angular component transaction",
+    );
+  });
+
+  it("resolves standalone Angular routes with loadComponent and barrels", async () => {
+    const root = await fixtureRoot("clawpatch-angular-standalone-");
+    await writeFixture(
+      root,
+      "package.json",
+      JSON.stringify(
+        {
+          name: "standalone-angular",
+          dependencies: { "@angular/core": "1.0.0", "@angular/router": "1.0.0" },
+        },
+        null,
+        2,
+      ),
+    );
+    await writeFixture(
+      root,
+      "tsconfig.json",
+      JSON.stringify(
+        {
+          compilerOptions: {
+            baseUrl: ".",
+            paths: { "@pages/*": ["src/app/pages/*"] },
+          },
+        },
+        null,
+        2,
+      ),
+    );
+    await writeFixture(
+      root,
+      "src/app/app.routes.ts",
+      [
+        "import { Routes, provideRouter } from '@angular/router';",
+        "import { LoginPage as SignInPage } from '@pages/login';",
+        "const extraRoutes = [",
+        "  { path: 'help', loadComponent: () => import('src/app/pages/help/help.page').then((m) => m.HelpPage) },",
+        "];",
+        "export const routes = [",
+        "  { path: 'login', component: SignInPage, title: 'Sign in', data: { experiment: 'login-v2', requiresAuth: true } },",
+        "  ...extraRoutes,",
+        "] as Routes;",
+        "provideRouter(routes);",
+      ].join("\n"),
+    );
+    await writeFixture(
+      root,
+      "src/app/pages/login/index.ts",
+      "export { LoginPage } from './login.page';\n",
+    );
+    await writeFixture(
+      root,
+      "src/app/pages/login/login.page.ts",
+      "@Component({}) export class LoginPage {}\n",
+    );
+    await writeFixture(
+      root,
+      "src/app/pages/help/help.page.ts",
+      "@Component({}) export class HelpPage {}\n",
+    );
+
+    const project = await detectProject(root);
+    const result = await mapFeatures(root, project, []);
+    const login = result.features.find((feature) => feature.title === "Angular route /login");
+    const help = result.features.find((feature) => feature.title === "Angular route /help");
+
+    expect(login?.entrypoints[0]?.path).toBe("src/app/pages/login/login.page.ts");
+    expect(login?.summary).toContain("data experiment=login-v2");
+    expect(help?.entrypoints[0]?.path).toBe("src/app/pages/help/help.page.ts");
+  });
+
+  it("maps Angular modal, service roles, directives, pipes, and environment config", async () => {
+    const root = await fixtureRoot("clawpatch-angular-roles-");
+    await writeFixture(
+      root,
+      "package.json",
+      JSON.stringify(
+        {
+          name: "angular-roles",
+          dependencies: {
+            "@angular/core": "1.0.0",
+            "@angular/router": "1.0.0",
+            "@ionic/angular": "1.0.0",
+            "@capacitor/core": "1.0.0",
+            "@angular/fire": "1.0.0",
+            firebase: "1.0.0",
+          },
+          devDependencies: { "@angular/cli": "1.0.0" },
+        },
+        null,
+        2,
+      ),
+    );
+    await writeFixture(
+      root,
+      "angular.json",
+      JSON.stringify(
+        {
+          projects: {
+            app: {
+              sourceRoot: "src",
+              projectType: "application",
+              architect: {
+                build: {
+                  options: { styles: ["src/theme/variables.scss", "src/global.scss"] },
+                  configurations: {
+                    production: {
+                      fileReplacements: [
+                        {
+                          replace: "src/environments/environment.ts",
+                          with: "src/environments/environment.prod.ts",
+                        },
+                      ],
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+        null,
+        2,
+      ),
+    );
+    await writeFixture(root, "src/global.scss", "body {}\n");
+    await writeFixture(root, "src/theme/variables.scss", ":root {}\n");
+    await writeFixture(root, "src/environments/environment.ts", "export const environment = {};\n");
+    await writeFixture(
+      root,
+      "src/environments/environment.prod.ts",
+      "export const environment = { production: true };\n",
+    );
+    await writeFixture(
+      root,
+      "src/app/dashboard/dashboard.page.ts",
+      [
+        "import { ModalController } from '@ionic/angular';",
+        "import { SearchModalComponent } from './search-modal.component';",
+        "@Component({ templateUrl: './dashboard.page.html' })",
+        "export class DashboardPage {",
+        "  constructor(private modalController: ModalController) {}",
+        "  open() { return this.modalController.create({ component: SearchModalComponent }); }",
+        "}",
+      ].join("\n"),
+    );
+    await writeFixture(root, "src/app/dashboard/dashboard.page.html", "<ion-content />\n");
+    await writeFixture(
+      root,
+      "src/app/dashboard/search-modal.component.ts",
+      "@Component({ templateUrl: './search-modal.component.html' }) export class SearchModalComponent {}\n",
+    );
+    await writeFixture(
+      root,
+      "src/app/dashboard/search-modal.component.html",
+      "<ion-modal></ion-modal>\n",
+    );
+    await writeFixture(
+      root,
+      "src/app/services/api.service.ts",
+      "import { HttpClient } from '@angular/common/http'; export class ApiService { constructor(http: HttpClient) {} }\n",
+    );
+    await writeFixture(
+      root,
+      "src/app/services/storage.service.ts",
+      "import { Preferences } from '@capacitor/preferences'; export class StorageService {}\n",
+    );
+    await writeFixture(
+      root,
+      "src/app/services/tracking.service.ts",
+      "import mixpanel from 'mixpanel-browser'; export class TrackingService { track() { mixpanel.track('x'); } }\n",
+    );
+    await writeFixture(
+      root,
+      "src/app/experiments/membership-pricing.service.ts",
+      "import { GrowthBook } from '@growthbook/growthbook'; export class MembershipPricingService {}\n",
+    );
+    await writeFixture(
+      root,
+      "src/app/auth-local.ts",
+      "import { CanActivateFn } from '@angular/router'; export const authLocal: CanActivateFn = () => true;\n",
+    );
+    await writeFixture(
+      root,
+      "src/app/profile.resolver.ts",
+      "import { ResolveFn } from '@angular/router'; export const profileResolver: ResolveFn<string> = () => 'ok';\n",
+    );
+    await writeFixture(
+      root,
+      "src/app/interaction.directive.ts",
+      "import { Directive } from '@angular/core'; @Directive({ selector: '[interaction]' }) export class InteractionDirective {}\n",
+    );
+    await writeFixture(
+      root,
+      "src/app/money.pipe.ts",
+      "import { Pipe } from '@angular/core'; @Pipe({ name: 'money' }) export class MoneyPipe {}\n",
+    );
+    await writeFixture(
+      root,
+      "src/app/spec-only.directive.spec.ts",
+      "import { Directive } from '@angular/core'; @Directive({ selector: '[fake]' }) class FakeDirective {}\n",
+    );
+
+    const project = await detectProject(root);
+    const result = await mapFeatures(root, project, []);
+    const bySource = (source: string) =>
+      result.features
+        .filter((feature) => feature.source === source)
+        .map((feature) => feature.title);
+    const modal = result.features.find((feature) => feature.source === "angular-modal-component");
+    const environment = result.features.find(
+      (feature) => feature.title === "Angular config environment",
+    );
+
+    expect(modal?.entrypoints[0]?.path).toBe("src/app/dashboard/search-modal.component.ts");
+    expect(modal?.contextFiles).toContainEqual({
+      path: "src/app/dashboard/dashboard.page.ts",
+      reason: "creates modal SearchModalComponent",
+    });
+    expect(bySource("angular-api-service")).toContain("Angular API service api");
+    expect(bySource("angular-storage-service")).toContain("Angular storage service storage");
+    expect(bySource("angular-analytics-service")).toContain("Angular analytics service tracking");
+    expect(bySource("angular-experiment")).toContain("Angular experiment membership pricing");
+    expect(bySource("angular-guard")).toContain("Angular guard auth local");
+    expect(bySource("angular-resolver")).toContain("Angular resolver profile");
+    expect(bySource("angular-directive")).toContain("Angular directive interaction");
+    expect(bySource("angular-pipe")).toContain("Angular pipe money");
+    expect(bySource("angular-directive")).not.toContain(
+      "Angular directive spec only.directive.spec",
+    );
+    expect(environment?.ownedFiles).toEqual(
+      expect.arrayContaining([
+        { path: "src/environments/environment.ts", reason: "entrypoint" },
+        { path: "src/environments/environment.prod.ts", reason: "environment variant" },
+      ]),
+    );
+    expect(result.features.map((feature) => feature.title)).toEqual(
+      expect.arrayContaining(["Angular config global.scss", "Angular config variables.scss"]),
+    );
+  });
+
+  it("detects Angular projects from angular.json without Angular package dependencies", async () => {
+    const root = await fixtureRoot("clawpatch-angular-config-detect-");
+    await writeFixture(
+      root,
+      "package.json",
+      JSON.stringify({ name: "angular-json-only" }, null, 2),
+    );
+    await writeFixture(
+      root,
+      "angular.json",
+      JSON.stringify({ projects: { app: { sourceRoot: "src" } } }, null, 2),
+    );
+    await writeFixture(
+      root,
+      "src/app/app-routing.module.ts",
+      [
+        "import { RouterModule, Routes } from '@angular/router';",
+        "import { HomePage } from './home.page';",
+        "const routes: Routes = [{ path: 'home', component: HomePage }];",
+        "RouterModule.forRoot(routes);",
+      ].join("\n"),
+    );
+    await writeFixture(root, "src/app/home.page.ts", "@Component({}) export class HomePage {}\n");
+
+    const project = await detectProject(root);
+    const result = await mapFeatures(root, project, []);
+
+    expect(result.features.map((feature) => feature.title)).toContain("Angular route /home");
   });
 
   it("maps package bins, scripts, configs, and Next routes", async () => {
