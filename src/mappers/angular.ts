@@ -1853,6 +1853,7 @@ function isShellComponent(file: string): boolean {
 
 function angularRole(index: SourceIndex, file: string): AngularRole | null {
   const source = index.sources.get(file) ?? "";
+  const sanitized = maskComments(source);
   const lowerFile = file.toLowerCase();
   if (isGuardFile(index, file, source)) {
     return {
@@ -1890,7 +1891,7 @@ function angularRole(index: SourceIndex, file: string): AngularRole | null {
       trustBoundaries: ["serialization"],
     };
   }
-  if (lowerFile.endsWith(".service.ts") || /@Injectable\s*\(/u.test(source)) {
+  if (lowerFile.endsWith(".service.ts") || /@Injectable\s*\(/u.test(sanitized)) {
     return serviceRole(file, source);
   }
   return null;
@@ -1966,28 +1967,31 @@ function isGuardFile(index: SourceIndex, file: string, source: string): boolean 
 }
 
 function isResolverFile(index: SourceIndex, file: string, source: string): boolean {
-  return (
-    file.endsWith(".resolver.ts") ||
-    index.routeReferencedResolvers.has(file) ||
-    /\b(Resolve|ResolveFn)\b/u.test(source)
-  );
+  if (index.routeReferencedResolvers.has(file)) {
+    return true;
+  }
+  if (hasAngularRouterResolverImport(index, file, source)) {
+    return true;
+  }
+  return file.endsWith(".resolver.ts");
 }
 
 function isDirectiveFile(source: string, file: string): boolean {
-  return file.endsWith(".directive.ts") || /@Directive\s*\(/u.test(source);
+  return file.endsWith(".directive.ts") || /@Directive\s*\(/u.test(maskComments(source));
 }
 
 function isPipeFile(source: string, file: string): boolean {
-  return file.endsWith(".pipe.ts") || /@Pipe\s*\(/u.test(source);
+  return file.endsWith(".pipe.ts") || /@Pipe\s*\(/u.test(maskComments(source));
 }
 
 function hasRoleDecoratorOrImport(index: SourceIndex, file: string, role: AngularRole): boolean {
   const source = index.sources.get(file) ?? "";
+  const sanitized = maskComments(source);
   if (role.source === "directive") {
-    return /@Directive\s*\(/u.test(source);
+    return /@Directive\s*\(/u.test(sanitized);
   }
   if (role.source === "pipe") {
-    return /@Pipe\s*\(/u.test(source);
+    return /@Pipe\s*\(/u.test(sanitized);
   }
   if (role.source === "guard") {
     return isGuardFile(index, file, source);
@@ -1995,7 +1999,16 @@ function hasRoleDecoratorOrImport(index: SourceIndex, file: string, role: Angula
   if (role.source === "resolver") {
     return isResolverFile(index, file, source);
   }
-  return /@Injectable\s*\(/u.test(source) || file.endsWith(".service.ts");
+  return /@Injectable\s*\(/u.test(sanitized) || file.endsWith(".service.ts");
+}
+
+function hasAngularRouterResolverImport(index: SourceIndex, file: string, source: string): boolean {
+  const imports = importIndex(index, file, source);
+  return [...imports.symbols.values()].some(
+    (binding) =>
+      binding.moduleSpecifier === "@angular/router" &&
+      (binding.importedName === "Resolve" || binding.importedName === "ResolveFn"),
+  );
 }
 
 function routeTrustBoundaries(route: ResolvedRoute): TrustBoundary[] {
@@ -2454,15 +2467,21 @@ function injectCallSymbols(source: string): string[] {
 
 function isAngularComponent(index: SourceIndex, file: string): boolean {
   const source = index.sources.get(file) ?? "";
+  const sanitized = maskComments(source);
+  const hasComponentDecorator = /@Component\s*\(/u.test(sanitized);
+  const hasDirectiveDecorator = /@Directive\s*\(/u.test(sanitized);
+  if (!hasComponentDecorator && hasDirectiveDecorator) {
+    return false;
+  }
   return (
     /\.(page|component)\.ts$/u.test(file) ||
-    /@Component\s*\(/u.test(source) ||
-    /from\s+["']@angular\/core["']/u.test(source)
+    hasComponentDecorator ||
+    /from\s+["']@angular\/core["']/u.test(sanitized)
   );
 }
 
 function hasDecorator(index: SourceIndex, file: string, decorator: string): boolean {
-  return new RegExp(`@${decorator}\\s*\\(`, "u").test(index.sources.get(file) ?? "");
+  return new RegExp(`@${decorator}\\s*\\(`, "u").test(maskComments(index.sources.get(file) ?? ""));
 }
 
 function exportedSymbolName(index: SourceIndex, file: string): string | null {

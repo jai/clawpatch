@@ -524,6 +524,157 @@ describe("mapFeatures", () => {
     );
   });
 
+  it("does not classify bare resolver text in comments or method names as Angular resolvers", async () => {
+    const root = await fixtureRoot("clawpatch-angular-resolver-false-positive-");
+    await writeFixture(
+      root,
+      "package.json",
+      JSON.stringify(
+        { name: "angular-resolver-text", dependencies: { "@angular/router": "1.0.0" } },
+        null,
+        2,
+      ),
+    );
+    await writeFixture(
+      root,
+      "src/app/not-a-resolver.service.ts",
+      [
+        "// import { ResolveFn } from '@angular/router';",
+        "/*",
+        " * Example: export const oldResolver: ResolveFn<string> = () => 'ok';",
+        " */",
+        "export class NotAResolverService {",
+        "  loadResolveState() { return 'ok'; }",
+        "  maybeResolveFn() { return true; }",
+        "}",
+        "",
+      ].join("\n"),
+    );
+
+    const project = await detectProject(root);
+    const result = await mapFeatures(root, project, []);
+
+    expect(result.features.filter((feature) => feature.source === "angular-resolver")).toEqual([]);
+  });
+
+  it("classifies real Angular router Resolve imports as Angular resolvers", async () => {
+    const root = await fixtureRoot("clawpatch-angular-resolver-import-");
+    await writeFixture(
+      root,
+      "package.json",
+      JSON.stringify(
+        { name: "angular-resolver-import", dependencies: { "@angular/router": "1.0.0" } },
+        null,
+        2,
+      ),
+    );
+    await writeFixture(
+      root,
+      "src/app/account-prefetch.ts",
+      [
+        "import { Resolve as AngularResolve, ResolveFn } from '@angular/router';",
+        "export const accountPrefetch: ResolveFn<string> = () => 'ok';",
+        "export class LegacyAccountPrefetch implements AngularResolve<string> {",
+        "  resolve() { return 'ok'; }",
+        "}",
+        "",
+      ].join("\n"),
+    );
+
+    const project = await detectProject(root);
+    const result = await mapFeatures(root, project, []);
+    const resolvers = result.features.filter((feature) => feature.source === "angular-resolver");
+
+    expect(resolvers.map((feature) => feature.entrypoints[0]?.path)).toContain(
+      "src/app/account-prefetch.ts",
+    );
+  });
+
+  it("classifies route-referenced resolver files without resolver filenames", async () => {
+    const root = await fixtureRoot("clawpatch-angular-route-resolver-ref-");
+    await writeFixture(
+      root,
+      "package.json",
+      JSON.stringify(
+        {
+          name: "angular-route-resolver-ref",
+          dependencies: { "@angular/core": "1.0.0", "@angular/router": "1.0.0" },
+        },
+        null,
+        2,
+      ),
+    );
+    await writeFixture(
+      root,
+      "src/app/app.routes.ts",
+      [
+        "import { Routes } from '@angular/router';",
+        "import { HomePage } from './home/home.page';",
+        "import { CustomerData } from './customer-data';",
+        "export const routes: Routes = [",
+        "  { path: 'home', component: HomePage, resolve: { customer: CustomerData } },",
+        "];",
+        "",
+      ].join("\n"),
+    );
+    await writeFixture(
+      root,
+      "src/app/home/home.page.ts",
+      "@Component({}) export class HomePage {}\n",
+    );
+    await writeFixture(root, "src/app/customer-data.ts", "export class CustomerData {}\n");
+
+    const project = await detectProject(root);
+    const result = await mapFeatures(root, project, []);
+    const home = result.features.find((feature) => feature.title === "Angular route /home");
+    const resolvers = result.features.filter((feature) => feature.source === "angular-resolver");
+
+    expect(home?.contextFiles).toContainEqual({
+      path: "src/app/customer-data.ts",
+      reason: "resolve resolver CustomerData",
+    });
+    expect(resolvers.map((feature) => feature.entrypoints[0]?.path)).toContain(
+      "src/app/customer-data.ts",
+    );
+  });
+
+  it("does not emit component seeds for directive-only component-named files", async () => {
+    const root = await fixtureRoot("clawpatch-angular-directive-component-name-");
+    await writeFixture(
+      root,
+      "package.json",
+      JSON.stringify(
+        { name: "angular-directive-component", dependencies: { "@angular/core": "1.0.0" } },
+        null,
+        2,
+      ),
+    );
+    await writeFixture(
+      root,
+      "src/app/base-article-card.component.ts",
+      [
+        "import { Directive } from '@angular/core';",
+        "@Directive({ selector: '[baseArticleCard]' })",
+        "export class BaseArticleCardComponent {}",
+        "",
+      ].join("\n"),
+    );
+
+    const project = await detectProject(root);
+    const result = await mapFeatures(root, project, []);
+    const directive = result.features.find(
+      (feature) => feature.entrypoints[0]?.path === "src/app/base-article-card.component.ts",
+    );
+    const componentFeatures = result.features.filter(
+      (feature) =>
+        feature.entrypoints[0]?.path === "src/app/base-article-card.component.ts" &&
+        feature.source === "angular-component",
+    );
+
+    expect(directive?.source).toBe("angular-directive");
+    expect(componentFeatures).toEqual([]);
+  });
+
   it("detects Angular projects from angular.json without Angular package dependencies", async () => {
     const root = await fixtureRoot("clawpatch-angular-config-detect-");
     await writeFixture(
